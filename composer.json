@@ -1,0 +1,17 @@
+{
+  "name": "market-media/uploader",
+  "description": "É um gerenciador de upload PHP fácil de usar para imagens, arquivos e mídias em seu aplicativo.",
+  "homepage": "http://www.upinside.com.br",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.2",
+    "ext-gd": "*",
+    "ext-mbstring": "*",
+    "ext-exif": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "MarketMedia\\Uploader\\": "src"
+    }
+  }
+}

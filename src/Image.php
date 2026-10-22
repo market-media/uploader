@@ -2,124 +2,105 @@
 
 namespace MarketMedia\Uploader;
 
-use Exception;
+use InvalidArgumentException;
+use RuntimeException;
 
-/**
- * Class MarketMedia Image
- *
- * @package MarketMedia\Uploader
- */
 class Image extends Uploader
 {
-    /**
-     * Allow jpg, png, gif and webp images, use from check. For new extensions check the imageCrete method
-     * @var array allowed media types
-     */
-    protected static array $allowTypes = [
-        "image/jpeg",
-        "image/png",
-        "image/gif",
-        "image/webp",
+    protected const TYPES = [
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'gif' => ['image/gif'],
+        'webp' => ['image/webp'],
     ];
 
-    /**
-     * @param array $image
-     * @param string $name
-     * @param int $width
-     * @param array|null $quality
-     * @return string
-     * @throws Exception
-     */
+    public function isAllowed(): array
+    {
+        return array_values(array_unique(array_merge(...array_values(self::TYPES))));
+    }
+
+    public function isExtension(): array
+    {
+        return array_keys(self::TYPES);
+    }
+
     public function upload(array $image, string $name, int $width = 2000, ?array $quality = null): string
     {
-        if (empty($image['type'])) {
-            throw new Exception("Not a valid data from image");
+        if ($width < 1 || $width > $this->maxWidth) {
+            throw new InvalidArgumentException('Invalid output width');
         }
-
-        if (!$this->imageCreate($image)) {
-            throw new Exception("Not a valid image type or extension");
+        $quality = array_replace(['jpg' => 75, 'png' => 5, 'webp' => 75], $quality ?? []);
+        foreach (['jpg' => 100, 'png' => 9, 'webp' => 100] as $format => $maximum) {
+            if (!is_int($quality[$format]) || $quality[$format] < 0 || $quality[$format] > $maximum) {
+                throw new InvalidArgumentException('Invalid image quality');
+            }
         }
-
-        $this->name($name);
-
-        if ($this->ext == "gif") {
-            move_uploaded_file("{$image['tmp_name']}", "{$this->path}/{$this->name}");
-            return "{$this->path}/{$this->name}";
+        $mime = $this->validateUpload($image);
+        $this->validateType($mime, self::TYPES);
+        $size = $this->io(static fn () => getimagesize($image['tmp_name']));
+        if ($size === false || ($size['mime'] ?? null) !== $mime || $size[0] < 1 || $size[1] < 1
+            || $size[0] > $this->maxWidth || $size[1] > $this->maxHeight
+            || $size[0] > intdiv($this->maxPixels, $size[1])) {
+            throw new RuntimeException('Invalid image or image dimensions exceed limits');
         }
-
-        // Adicionado o default para webp => 75
-        $this->imageGenerate($width, ($quality ?? ["jpg" => 75, "png" => 5, "webp" => 75]));
-        return "{$this->path}/{$this->name}";
+        $decoder = match ($mime) {
+            'image/jpeg' => 'imagecreatefromjpeg',
+            'image/png' => 'imagecreatefrompng',
+            'image/gif' => 'imagecreatefromgif',
+            'image/webp' => 'imagecreatefromwebp',
+        };
+        $decoded = $this->io(static fn () => $decoder($image['tmp_name']));
+        if (!$decoded instanceof \GdImage) {
+            throw new RuntimeException('Could not decode image');
+        }
+        $this->file = $decoded;
+        try {
+            if (imagesx($decoded) !== $size[0] || imagesy($decoded) !== $size[1]) {
+                throw new RuntimeException('Inconsistent image dimensions');
+            }
+            if ($this->ext === 'jpeg') {
+                $this->ext = 'jpg';
+            }
+            return $this->store($name, function ($stream) use ($width, $quality): void {
+                $this->imageGenerate($stream, $width, $quality);
+            });
+        } finally {
+            $this->file = null;
+        }
     }
 
-    /**
-     * Image create and valid extension from mime-type
-     * https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types#Image_types
-     *
-     * @param array $image
-     * @return bool
-     */
-    protected function imageCreate(array $image): bool
+    private function imageGenerate($stream, int $width, array $quality): void
     {
-        if ($image['type'] == "image/jpeg") {
-            $this->file = imagecreatefromjpeg($image['tmp_name']);
-            $this->ext = "jpg";
-            return true;
+        $sourceWidth = imagesx($this->file);
+        $sourceHeight = imagesy($this->file);
+        $targetWidth = min($width, $sourceWidth);
+        $targetHeight = max(1, (int) floor($targetWidth * $sourceHeight / $sourceWidth));
+        $target = imagecreatetruecolor($targetWidth, $targetHeight);
+        if ($target === false) {
+            throw new RuntimeException('Could not allocate output image');
         }
-
-        if ($image['type'] == "image/png") {
-            $this->file = imagecreatefrompng($image['tmp_name']);
-            $this->ext = "png";
-            return true;
+        if ($this->ext !== 'jpg') {
+            imagealphablending($target, false);
+            imagesavealpha($target, true);
+            $transparent = imagecolorallocatealpha($target, 0, 0, 0, 127);
+            imagefill($target, 0, 0, $transparent);
+            if ($this->ext === 'gif') {
+                imagecolortransparent($target, $transparent);
+            }
         }
-
-        if ($image['type'] == "image/webp") {
-            $this->file = imagecreatefromwebp($image['tmp_name']);
-            $this->ext = "webp";
-            return true;
+        if (!imagecopyresampled($target, $this->file, 0, 0, 0, 0,
+            $targetWidth, $targetHeight, $sourceWidth, $sourceHeight)) {
+            throw new RuntimeException('Could not resize image');
         }
-
-        if ($image['type'] == "image/gif") {
-            $this->ext = "gif";
-            return true;
+        $saved = match ($this->ext) {
+            'jpg' => imagejpeg($target, $stream, $quality['jpg']),
+            'png' => imagepng($target, $stream, $quality['png']),
+            'gif' => imagegif($target, $stream),
+            'webp' => imagewebp($target, $stream, $quality['webp']),
+        };
+        if (!$saved) {
+            throw new RuntimeException('Could not encode image');
         }
-
-        return false;
-    }
-
-    /**
-     * @param int $width
-     * @param array $quality
-     */
-    private function imageGenerate(int $width, array $quality): void
-    {
-        $fileX = intval(imagesx($this->file));
-        $fileY = intval(imagesy($this->file));
-        $imageW = ($width < $fileX ? $width : $fileX);
-        $imageH = intval(($imageW * $fileY) / $fileX);
-        $imageCreate = imagecreatetruecolor($imageW, $imageH);
-
-        if ($this->ext == "jpg") {
-            imagecopyresampled($imageCreate, $this->file, 0, 0, 0, 0, $imageW, $imageH, $fileX, $fileY);
-            imagejpeg($imageCreate, "{$this->path}/{$this->name}", $quality['jpg']);
-        }
-
-        if ($this->ext == "png") {
-            imagealphablending($imageCreate, false);
-            imagesavealpha($imageCreate, true);
-            imagecopyresampled($imageCreate, $this->file, 0, 0, 0, 0, $imageW, $imageH, $fileX, $fileY);
-            imagepng($imageCreate, "{$this->path}/{$this->name}", $quality['png']);
-        }
-
-        if ($this->ext == "webp") {
-            // WebP também suporta transparência, então mantemos a configuração de alpha
-            imagealphablending($imageCreate, false);
-            imagesavealpha($imageCreate, true);
-            imagecopyresampled($imageCreate, $this->file, 0, 0, 0, 0, $imageW, $imageH, $fileX, $fileY);
-            imagewebp($imageCreate, "{$this->path}/{$this->name}", $quality['webp']);
-        }
-
-        imagedestroy($this->file);
-        imagedestroy($imageCreate);
     }
 }

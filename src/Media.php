@@ -2,51 +2,27 @@
 
 namespace MarketMedia\Uploader;
 
-use Exception;
-
-/**
- * Class MarketMedia Media
- *
- * @package MarketMedia\Uploader
- */
 class Media extends Uploader
 {
-    /**
-     * Allow mp4 video and mp3 audio
-     * @var array allowed media types
-     * https://www.freeformatter.com/mime-types-list.html
-     */
-    protected static array $allowTypes = [
-        "audio/mp3",
-        "audio/mpeg",
-        "video/mp4",
+    protected const TYPES = [
+        'mp3' => ['audio/mpeg', 'audio/mp3'],
+        'mp4' => ['video/mp4', 'application/mp4'],
     ];
 
-    /**
-     * Allowed extensions to types.
-     * @var array
-     */
-    protected static array $extensions = [
-        "mp3",
-        "mp4"
-    ];
+    public function isAllowed(): array
+    {
+        return array_merge(...array_values(self::TYPES));
+    }
 
-    /**
-     * @param array $media
-     * @param string $name
-     * @return string
-     * @throws Exception
-     */
+    public function isExtension(): array
+    {
+        return array_keys(self::TYPES);
+    }
+
     public function upload(array $media, string $name): string
     {
-        $this->ext($media);
-
-        if (!in_array($media['type'], static::$allowTypes) || !in_array($this->ext, static::$extensions)) {
-            throw new Exception("Not a valid media type or extension");
-        }
-
-        $this->name($name);
-        move_uploaded_file($media['tmp_name'], "{$this->path}/{$this->name}");
-        return "{$this->path}/{$this->name}";
+        $mime = $this->validateUpload($media);
+        $this->validateType($mime, self::TYPES);
+        return $this->storeUpload($media, $name);
     }
 }

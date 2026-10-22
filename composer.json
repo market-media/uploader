@@ -4,10 +4,15 @@
   "homepage": "http://www.upinside.com.br",
   "license": "MIT",
   "require": {
-    "php": ">=8.2",
+    "php": "^8.5",
     "ext-gd": "*",
+    "ext-fileinfo": "*",
+    "ext-zip": "*",
     "ext-mbstring": "*",
     "ext-exif": "*"
+  },
+  "scripts": {
+    "test": "@php tests/run.php"
   },
   "autoload": {
     "psr-4": {
